@@ -39,6 +39,35 @@ Swagger / ReDoc:
 - ReDoc: http://localhost:8000/redoc
 - OpenAPI JSON: http://localhost:8000/openapi.json
 
+## Web UI (React Demo)
+
+A minimal, zero-install React web app is bundled and served statically from the API at `/web`.
+
+Run and open:
+
+```bash
+uvicorn app.main:app --reload
+# then visit:
+open http://localhost:8000/web/
+```
+
+How to operate:
+
+- Enter the main complaint (e.g., "Headache since yesterday") and click "Start Chat".
+- The assistant asks one question at a time.
+- Type your reply in the input box and click "Send".
+- Continue until `done=true` and the final summary is shown in the chat.
+
+Notes:
+
+- The UI calls the API at `window.location.origin` by default. If your API is on a different origin/port, change the "API Base" field in the header (e.g., `http://localhost:8001`).
+- When served from the same origin (`/web`), CORS is not required. If you choose to host the UI elsewhere, configure CORS in FastAPI accordingly.
+
+Implementation:
+
+- Static files live under `webapp/` and are mounted in `app/main.py` at `/web` using `StaticFiles`.
+- The UI is a single-file React component loaded via CDN (no `npm install` needed). Styles are in `webapp/style.css`.
+
 ## API
 
 - POST `/chat/start` — start a session and get the first question (or summary if the initial message already satisfies requirements).
@@ -51,8 +80,7 @@ Swagger / ReDoc:
 curl -X POST http://localhost:8000/chat/start \
   -H 'Content-Type: application/json' \
   -d '{
-    "complaint": "headache",
-    "initial_message": "I have a bad headache since yesterday"
+    "complaint": "I have a bad headache since yesterday"
   }'
 ```
 
@@ -90,7 +118,7 @@ Tip: You can perform the same flow from Swagger UI at `/docs` — open the `chat
 # 1) Start (server generates session_id)
 curl -s -X POST http://localhost:8000/chat/start \
   -H 'Content-Type: application/json' \
-  -d '{"complaint":"headache","initial_message":"Headache since yesterday"}' | tee /tmp/start.json | jq .
+  -d '{"complaint":"I have a bad headache since yesterday"}' | tee /tmp/start.json | jq .
 
 # 2) Continue with your answer (replace with the question you got above)
 SID=$(jq -r .session_id /tmp/start.json)

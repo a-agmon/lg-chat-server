@@ -11,6 +11,11 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from .config import settings
 import logging
+from .prompts import (
+    build_select_kb_messages,
+    build_initial_interview_messages,
+    append_last_user_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +24,6 @@ class ChatState(TypedDict, total=False):
     # Core inputs
     complaint: str
     last_user_message: Optional[str]
-    initial_context: Optional[str]
 
     # Knowledge base selection
     kb_record: Dict[str, Any]  # {id, main_complaint[], relevant_information, relevant_tests}
@@ -57,35 +61,23 @@ def _safe_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 
 
 def retrieve_kb(state: ChatState) -> ChatState:
-    kb = _load_kb()  # list of records
     if state.get("kb_record"):
         return state
+    
+    kb = _load_kb()  # list of records
 
     # Build a small catalog for the LLM to select from
     catalog = [
         {"id": r.get("id"), "main_complaint": r.get("main_complaint", [])}
         for r in kb if r.get("id")
     ]
-    # Selection uses the initial context only (first turn)
-    user_text = (state.get("initial_context") or "").strip()
     complaint_text = (state.get("complaint") or "").strip()
-
-    system = (
-        "You are a medical triage assistant. "
-        "Choose the single most relevant complaint category recordfrom the catalog "
-        "based on the patient's main complaint and initial text. Output strict JSON only: {\"record_id\": string}."
-    )
-    user = (
-        "Catalog (id and keywords):\n" + json.dumps(catalog, ensure_ascii=False) + "\n\n" +
-        f"Main complaint: {complaint_text}\n" +
-        f"Initial message: {user_text}\n"
-    )
+    if not complaint_text:
+        logger.error("No complaint text found")
+        raise ValueError("No complaint text found")
 
     llm = ChatOpenAI(model=settings.openai_model, temperature=0, api_key=settings.openai_api_key)
-    choice = llm.invoke([
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ])
+    choice = llm.invoke(build_select_kb_messages(catalog, complaint_text))
     parsed = _safe_json_from_text(getattr(choice, "content", "")) or {}
     record_id = parsed.get("record_id") or parsed.get("id")
 
@@ -98,6 +90,7 @@ def retrieve_kb(state: ChatState) -> ChatState:
     else:
         logger.error("KB selection failed; no matching record found for record_id=%s", record_id)
         raise ValueError(f"Failed to find KB record with id: {record_id}")
+    logger.info("Main complaint: %s KB selected record_id=%s (session_id=%s)", complaint_text, selected.get("id"), state.get("session_id"))
 
     new_state: ChatState = {
         **state,
@@ -123,49 +116,14 @@ def _build_interview_prompt(state: ChatState) -> List[Dict[str, str]]:
     
     # Check if this is the first call (no messages yet)
     if not existing_messages:
-        # First call: build the initial prompt
+        # First call: build the initial prompt using the selected KB record
         complaint = state.get("complaint", "")
-        initial_context = state.get("initial_context", "")
         record = state.get("kb_record", {})
-        record_id = record.get("id")
-        relevant_info = record.get("relevant_information", "")
-        relevant_tests = record.get("relevant_tests", "")
-
-        system = (
-            "You are a medical intake assistant. "
-            "Develop your own concise, empathetic questions to gather all information relevant to the case. "
-            "Use the provided 'relevant_information' as guidance for what information should be collected. "
-            "Ask only one question at a time, and continue asking until you have enough information. "
-            "Only when you have enough information, stop asking and output a final JSON object.\n\n"
-            "Final output format (strict JSON only when the interview is complete):\n"
-            "{\n"
-            "  \"done\": true,\n"
-            "  \"collected_information\": object,\n"
-            "  \"summary\": string\n"
-            "}\n"
-            "If you still need more information, DO NOT output JSON; instead, ask the next single question only."
-            "IMPORTANT: Ask only one question at a time and not more than 5 rounds of questions"
-        )
-
-        user_context = (
-            f"Selected schema id: {record_id}\n"
-            f"Main complaint: {complaint}\n\n"
-            f"Relevant information to gather: {relevant_info}\n"
-            f"Relevant tests (for context only, do not order tests): {relevant_tests}\n\n"
-            f"Initial patient message: {json.dumps(initial_context or '', ensure_ascii=False)}\n"
-        )
-
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_context},
-        ]
+        messages = build_initial_interview_messages(complaint, record)
     else:
         # Subsequent calls: use existing messages and append the last user message
-        # The existing messages should already contain the system prompt and conversation history
-        messages = existing_messages[:]
         last_user = state.get("last_user_message")
-        if last_user:
-            messages.append({"role": "user", "content": last_user})
+        messages = append_last_user_message(existing_messages[:], last_user)
     
     return messages
 
