@@ -8,18 +8,14 @@ class StartRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={
         "examples": [
             {
-                "complaint": "headache",
-                "initial_message": "I have a bad headache since yesterday"
+                "complaint": "I have a bad headache since yesterday"
             }
         ]
     })
     session_id: Optional[str] = Field(
         default=None, description="Optional session id; server generates one if omitted"
     )
-    complaint: str = Field(..., description="Main complaint, e.g., 'headache'")
-    initial_message: Optional[str] = Field(
-        default=None, description="Optional initial user message narrative"
-    )
+    complaint: str = Field(..., description="Patient's initial complaint or symptom description")
 
 
 class MessageRequest(BaseModel):

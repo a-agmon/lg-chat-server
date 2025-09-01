@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Medical Intake Chatbot</title>
+    <link rel="stylesheet" href="/web/style.css" />
+    <!-- React and Babel from CDN for a zero-install demo -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useRef, useState } = React;
+
+      function App() {
+        const [apiBase, setApiBase] = useState(window.location.origin);
+        const [complaint, setComplaint] = useState("");
+        const [input, setInput] = useState("");
+        const [sessionId, setSessionId] = useState("");
+        const [messages, setMessages] = useState([]); // {role: 'user'|'assistant', content}
+        const [done, setDone] = useState(false);
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState("");
+        const bottomRef = useRef(null);
+
+        useEffect(() => {
+          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, [messages, done]);
+
+        async function startChat(e) {
+          e?.preventDefault();
+          setError("");
+          if (!complaint.trim()) {
+            setError("Please enter a main complaint.");
+            return;
+          }
+          setLoading(true);
+          try {
+            const res = await fetch(`${apiBase}/chat/start`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ complaint }),
+            });
+            if (!res.ok) throw new Error(`Start failed: ${res.status}`);
+            const data = await res.json();
+            setSessionId(data.session_id);
+            setDone(!!data.done);
+            setMessages([{ role: "assistant", content: data.message }]);
+          } catch (err) {
+            console.error(err);
+            setError("Failed to start chat. Check server and API base.");
+          } finally {
+            setLoading(false);
+          }
+        }
+
+        async function sendMessage(e) {
+          e?.preventDefault();
+          setError("");
+          if (!sessionId) {
+            setError("Start the chat first.");
+            return;
+          }
+          const content = input.trim();
+          if (!content) return;
+          setInput("");
+          setLoading(true);
+          const newMsgs = [...messages, { role: "user", content }];
+          setMessages(newMsgs);
+          try {
+            const res = await fetch(`${apiBase}/chat/${sessionId}/message`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content }),
+            });
+            if (!res.ok) throw new Error(`Send failed: ${res.status}`);
+            const data = await res.json();
+            setDone(!!data.done);
+            setMessages([...newMsgs, { role: "assistant", content: data.message }]);
+          } catch (err) {
+            console.error(err);
+            setError("Failed to send message. See console for details.");
+          } finally {
+            setLoading(false);
+          }
+        }
+
+        function resetChat() {
+          setSessionId("");
+          setMessages([]);
+          setDone(false);
+          setInput("");
+          setError("");
+        }
+
+        return (
+          <div className="page">
+            <header className="header">
+              <div>
+                <h1>Medical Intake Chatbot</h1>
+                <p className="muted">LangGraph-powered demo</p>
+              </div>
+              <div className="api-base">
+                <label>
+                  API Base
+                  <input
+                    value={apiBase}
+                    onChange={(e) => setApiBase(e.target.value)}
+                    placeholder="http://localhost:8000"
+                  />
+                </label>
+              </div>
+            </header>
+
+            <section className="start">
+              <form onSubmit={startChat} className="start-form">
+                <input
+                  className="complaint-input"
+                  value={complaint}
+                  onChange={(e) => setComplaint(e.target.value)}
+                  placeholder="Describe the main complaint (e.g., 'Headache since yesterday')"
+                  disabled={!!sessionId}
+                />
+                <button type="submit" disabled={!!sessionId || loading}>
+                  {sessionId ? "Chat Started" : loading ? "Starting..." : "Start Chat"}
+                </button>
+                {sessionId && (
+                  <button type="button" className="secondary" onClick={resetChat} disabled={loading}>
+                    Reset
+                  </button>
+                )}
+              </form>
+              {error && <div className="error">{error}</div>}
+            </section>
+
+            <section className="chat">
+              <div className="messages">
+                {messages.map((m, i) => (
+                  <div key={i} className={`msg ${m.role}`}>
+                    <div className="bubble">{m.content}</div>
+                  </div>
+                ))}
+                {done && (
+                  <div className="done note">Conversation complete. Summary above.</div>
+                )}
+                <div ref={bottomRef} />
+              </div>
+
+              <form onSubmit={sendMessage} className="input-row">
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder={done ? "Chat is complete" : sessionId ? "Type your reply..." : "Start chat first"}
+                  disabled={!sessionId || done || loading}
+                />
+                <button type="submit" disabled={!sessionId || done || loading}>
+                  {loading ? "Sending..." : "Send"}
+                </button>
+              </form>
+            </section>
+
+            <footer className="footer">
+              <a href="/docs" target="_blank" rel="noreferrer">API docs</a>
+              <span>•</span>
+              <a href="/web/" target="_blank" rel="noreferrer">Open Web UI</a>
+            </footer>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+  </html>
+

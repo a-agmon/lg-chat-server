@@ -4,8 +4,10 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import cast, List, Optional, Any, Dict
+from pathlib import Path as FSPath
 from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -125,9 +127,7 @@ def start_chat(req: StartRequest):
 
     base_state = {
         "complaint": req.complaint,
-        "initial_context": req.initial_message,
-        "last_user_message": req.initial_message,
-        "messages": ([{"role": "user", "content": req.initial_message}] if req.initial_message else []),
+        "messages": [],  # Let interview logic handle initial message
     }
 
     try:
@@ -158,13 +158,13 @@ def continue_chat(session_id: str = Path(..., description="Chat session id"), re
     if not req or not req.content:
         raise HTTPException(status_code=400, detail="Message content is required")
 
-    # Get existing state to append messages properly
+    # Get existing state to pass through
     existing_messages = get_session_messages(session_id)
     
-    # Append new user message to existing messages
+    # Pass existing messages and new user message - let interview logic handle appending
     state_delta = {
         "last_user_message": req.content,
-        "messages": existing_messages + [{"role": "user", "content": req.content}],
+        "messages": existing_messages,  # Don't append here, let interview logic handle it
     }
 
     try:
@@ -195,3 +195,16 @@ def get_state(session_id: str):
     except Exception as e:
         logger.exception("Failed to get state: %s", e)
         return JSONResponse(status_code=500, content={"detail": "Failed to fetch state"})
+
+
+# Serve static demo webapp if folder exists
+try:
+    project_root = FSPath(__file__).resolve().parents[1]
+    static_dir = project_root / "webapp"
+    if static_dir.exists():
+        app.mount("/web", StaticFiles(directory=str(static_dir), html=True), name="web")
+        logger.info("Mounted web UI at /web from %s", static_dir)
+    else:
+        logger.info("Web UI folder not found at %s; skipping mount", static_dir)
+except Exception as e:
+    logger.warning("Failed to mount web UI: %s", e)

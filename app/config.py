@@ -1,14 +1,15 @@
-from pydantic import BaseModel, SecretStr
-import os
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings
 
-
-class Settings(BaseModel):
-    openai_api_key: SecretStr | None = SecretStr(os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") is not None else None
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o")
-    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+class Settings(BaseSettings):
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-4o"
+    log_level: str = "INFO"
     # Path to complaint KB
-    kb_path: str = os.getenv("KB_PATH", "data/complaints.json")
+    kb_path: str = "data/complaints.json"
 
+    class Config:
+        env_file = ".env"
 
 settings = Settings()
 
