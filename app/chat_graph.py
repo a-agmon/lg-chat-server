@@ -104,28 +104,57 @@ def retrieve_kb(state: ChatState) -> ChatState:
 
 
 def _build_interview_prompt(state: ChatState) -> List[Dict[str, str]]:
+    """Build the prompt to send to the LLM.
+
+    Always include a fresh system instruction and KB user-context (transient),
+    then append the dynamic conversation history (user/assistant turns only),
+    and finally the latest user message if provided.
+
+    This avoids persisting the large system/KB context on every turn and
+    prevents exponential duplication with add_messages aggregator.
+    """
+    # Transient base: system + KB user context
+    complaint = state.get("complaint", "")
+    record = state.get("kb_record", {})
+    base_messages = build_initial_interview_messages(complaint, record)
+
+    # Existing dynamic history (from checkpoint)
     existing_messages = state.get("messages", [])
-    
+
     # Convert LangChain message objects to dicts if needed
     def message_to_dict(msg):
-        if hasattr(msg, 'type'):  # LangChain message object
-            return {"role": msg.type, "content": msg.content}
-        return msg  # Already a dict
-    
-    existing_messages = [message_to_dict(msg) for msg in existing_messages]
-    
-    # Check if this is the first call (no messages yet)
-    if not existing_messages:
-        # First call: build the initial prompt using the selected KB record
-        complaint = state.get("complaint", "")
-        record = state.get("kb_record", {})
-        messages = build_initial_interview_messages(complaint, record)
-    else:
-        # Subsequent calls: use existing messages and append the last user message
-        last_user = state.get("last_user_message")
-        messages = append_last_user_message(existing_messages[:], last_user)
-    
-    return messages
+        if hasattr(msg, "type") and hasattr(msg, "content"):
+            # Map LangChain 'ai'/'human' to OpenAI roles 'assistant'/'user' if needed
+            role = getattr(msg, "type", None)
+            if role == "ai":
+                role = "assistant"
+            elif role == "human":
+                role = "user"
+            return {"role": role or "user", "content": getattr(msg, "content", "")}
+        return msg  # Already a dict-like {role, content}
+
+    normalized_history = [message_to_dict(m) for m in existing_messages]
+
+    # Filter out any accidental persisted system or KB-context messages from prior runs
+    def is_kb_context_user_message(m: Dict[str, str]) -> bool:
+        try:
+            c = (m or {}).get("content", "") or ""
+            return c.startswith("Medical category id:")
+        except Exception:
+            return False
+
+    dynamic_history: List[Dict[str, str]] = [
+        m for m in normalized_history
+        if m and m.get("role") in {"user", "assistant"} and not is_kb_context_user_message(m)
+    ]
+
+    # Optionally append the last user message
+    last_user = state.get("last_user_message")
+    if last_user:
+        dynamic_history = append_last_user_message(dynamic_history, last_user)
+
+    # Final prompt to send to the LLM
+    return [*base_messages, *dynamic_history]
 
 
 def interview(state: ChatState) -> ChatState:
@@ -135,8 +164,8 @@ def interview(state: ChatState) -> ChatState:
         api_key=settings.openai_api_key,
     )
 
-    messages = _build_interview_prompt(state)
-    result = llm.invoke(messages)
+    messages_to_send = _build_interview_prompt(state)
+    result = llm.invoke(messages_to_send)
     # Ensure text is always a string, even if result.content is a list or other type
     text = str(result.content if hasattr(result, "content") else result)
     parsed = _safe_json_from_text(text)
@@ -145,12 +174,15 @@ def interview(state: ChatState) -> ChatState:
         summary = parsed.get("summary")
         final_collected = parsed.get("collected_information") or parsed.get("collected_fields") or None
         assistant_msg = summary or ""
-        # Append assistant response to the messages we built for this call
-        current_messages = messages  # The messages we just sent to LLM
-        new_messages = current_messages + ([{"role": "assistant", "content": assistant_msg}] if assistant_msg else [])
+        # Persist only the incremental turns (avoid re-adding system/KB context)
+        delta_messages: List[Dict[str, str]] = []
+        if state.get("last_user_message"):
+            delta_messages.append({"role": "user", "content": state.get("last_user_message") or ""})
+        if assistant_msg:
+            delta_messages.append({"role": "assistant", "content": assistant_msg})
         new_state: ChatState = {
             **state,
-            "messages": new_messages,
+            "messages": delta_messages,
             "done": True,
             "summary": summary,
             "next_question": None,
@@ -163,13 +195,15 @@ def interview(state: ChatState) -> ChatState:
 
     # Ongoing: treat model output as the next question
     assistant_msg = (text or "").strip()
-    # Append assistant response to the messages we built for this call
-    # (which includes system prompt on first call, conversation history on subsequent calls)
-    current_messages = messages  # The messages we just sent to LLM
-    new_messages = current_messages + ([{"role": "assistant", "content": assistant_msg}] if assistant_msg else [])
+    # Persist only incremental messages (user reply if present, then assistant question)
+    delta_messages: List[Dict[str, str]] = []
+    if state.get("last_user_message"):
+        delta_messages.append({"role": "user", "content": state.get("last_user_message") or ""})
+    if assistant_msg:
+        delta_messages.append({"role": "assistant", "content": assistant_msg})
     new_state: ChatState = {
         **state,
-        "messages": new_messages,
+        "messages": delta_messages,
         "done": False,
         "summary": None,
         "next_question": assistant_msg,
