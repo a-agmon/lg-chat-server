@@ -41,6 +41,20 @@ def _load_kb() -> List[Dict[str, Any]]:
     with open(settings.kb_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+#
+def _message_to_dict(msg):
+    """
+    Convert LangChain message objects to dicts if needed.
+    """
+    if hasattr(msg, "type") and hasattr(msg, "content"):
+        # Map LangChain 'ai'/'human' to OpenAI roles 'assistant'/'user' if needed
+        role = getattr(msg, "type", None)
+        if role == "ai":
+            role = "assistant"
+        elif role == "human":
+            role = "user"
+        return {"role": role or "user", "content": getattr(msg, "content", "")}
+    return msg  # Already a dict-like {role, content}
 
 def _safe_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     # Try direct parse
@@ -121,19 +135,9 @@ def _build_interview_prompt(state: ChatState) -> List[Dict[str, str]]:
     # Existing dynamic history (from checkpoint)
     existing_messages = state.get("messages", [])
 
-    # Convert LangChain message objects to dicts if needed
-    def message_to_dict(msg):
-        if hasattr(msg, "type") and hasattr(msg, "content"):
-            # Map LangChain 'ai'/'human' to OpenAI roles 'assistant'/'user' if needed
-            role = getattr(msg, "type", None)
-            if role == "ai":
-                role = "assistant"
-            elif role == "human":
-                role = "user"
-            return {"role": role or "user", "content": getattr(msg, "content", "")}
-        return msg  # Already a dict-like {role, content}
 
-    normalized_history = [message_to_dict(m) for m in existing_messages]
+
+    normalized_history = [_message_to_dict(m) for m in existing_messages]
 
     # Filter out any accidental persisted system or KB-context messages from prior runs
     def is_kb_context_user_message(m: Dict[str, str]) -> bool:

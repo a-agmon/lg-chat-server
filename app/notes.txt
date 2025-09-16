@@ -1,0 +1,2 @@
+why are we using ""last_user_message""
+why messages are pulled in the continue_chat function
